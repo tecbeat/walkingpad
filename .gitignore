@@ -22,3 +22,8 @@ venv/
 
 # OS
 .DS_Store
+
+# Local dev stack (HA container config)
+dev/homeassistant/*
+!dev/homeassistant/configuration.yaml
+!dev/homeassistant/.gitkeep

@@ -1,0 +1,7 @@
+---
+repo:
+  description: The repository description goes here!
+  command: "docker compose up -d"
+  feature:
+    Please fill in: 'Describe the features of the service'
+

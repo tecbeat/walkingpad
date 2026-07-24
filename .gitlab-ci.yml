@@ -1,0 +1,5 @@
+---
+include:
+  - project: 'maintenance/teccave_pipeline'
+    ref: main
+    file: '/.pipeline_defs/.default_pipeline.yml'

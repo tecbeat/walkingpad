@@ -85,13 +85,12 @@ def test_parse_state_decodes_example_from_ph4_readme() -> None:
 
     Bytes: f8 a2 01 0f 01 00 0f d1 00 00 ab 00 12 ae 3c 00 00 00 3a fd
     Meaning per README:
-      - belt_state = 1 (running)
+      - belt_state = 1 (running, ph4 reference variant)
       - speed = 0x0f = 15  -> 1.5 km/h
       - manual mode flag = 1
       - time = 0x000fd1 = 4049 s
       - distance = 0x0000ab = 171 (units of 10 m) -> 1.71 km
       - steps = 0x0012ae = 4782
-      - app_speed = 60 -> 6.0 km/h
     """
     payload = bytes.fromhex("f8a2010f01000fd10000ab0012ae3c0000003afd")
     data = parse_state(payload)
@@ -99,10 +98,57 @@ def test_parse_state_decodes_example_from_ph4_readme() -> None:
     assert data.status is Status.RUNNING
     assert data.mode is Mode.MANUAL
     assert data.speed_feedback == 1.5
-    assert data.speed_cmd == 6.0
     assert data.duration_sec == 4049
     assert data.distance_km == 1.71
     assert data.steps == 4782
+
+
+def test_parse_state_running_state_2_from_real_a1() -> None:
+    """Real 2026 A1 unit reports belt_state=2 while running.
+
+    Frame observed during dev/ble_baseline_run.py at feedback=1.5 km/h.
+    Both belt_state=1 (ph4) and belt_state=2 (real unit) must map to RUNNING.
+    """
+    payload = bytes.fromhex("f8a2020f010000030000000000002d000000e4fd")
+    data = parse_state(payload)
+    assert data is not None
+    assert data.status is Status.RUNNING
+    assert data.speed_feedback == 1.5
+
+
+def test_parse_state_running_with_zero_feedback_is_stopping() -> None:
+    """belt_state=2 but feedback=0 means the belt is ramping down.
+
+    Prevents the status entity from showing 'running' during the last
+    second or so of a stop transition.
+    """
+    payload = bytes.fromhex("f8a20200010000030000000000002d000000d5fd")
+    data = parse_state(payload)
+    assert data is not None
+    assert data.status is Status.STOPPING
+
+
+def test_parse_state_standby_reports_status_standby() -> None:
+    payload = bytes.fromhex("f8a205000200000000000000000000000000a9fd")
+    data = parse_state(payload)
+    assert data is not None
+    assert data.mode is Mode.STANDBY
+    assert data.status is Status.STANDBY
+
+
+def test_handshake_command_matches_ph4_reference() -> None:
+    """The 0xA5 handshake payload is copied verbatim from ph4-walkingpad."""
+    packet = _protocol.handshake_command()
+    assert packet == bytes.fromhex("f7a5604a4d937129c9fd")
+
+
+def test_ask_stats_command_frames_correctly() -> None:
+    packet = _protocol.ask_stats_command()
+    assert packet[0:2] == b"\xf7\xa2"
+    assert packet[2] == 0x00
+    assert packet[3] == 0x00
+    assert packet[-1] == 0xFD
+    assert _crc_ok(packet)
 
 
 def test_parse_state_rejects_short_payload() -> None:

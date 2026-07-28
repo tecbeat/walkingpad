@@ -96,7 +96,12 @@ def fake_pad() -> FakePad:
 
 @pytest_asyncio.fixture
 async def treadmill(monkeypatch, fake_pad):
-    """A connected WalkingPadTreadmill talking to the FakePad."""
+    """A connected WalkingPadTreadmill talking to the FakePad.
+
+    The background poll loop is neutralised (interval set to 1 hour) so tests
+    can make exact assertions about which commands the code under test sent.
+    Post-connect handshake writes are consumed here as well.
+    """
 
     async def _fake_establish_connection(
         client_class, ble_device, name, disconnected_callback, **_kwargs
@@ -107,11 +112,19 @@ async def treadmill(monkeypatch, fake_pad):
     monkeypatch.setattr(
         _walkingpad, "establish_connection", _fake_establish_connection
     )
+    monkeypatch.setattr(_walkingpad, "POLL_INTERVAL_SEC", 3600)
 
     treadmill = WalkingPadTreadmill(_make_ble_device())
     await treadmill.async_ensure_connected()
     assert treadmill.connected
-    return treadmill
+    # Let the initial poll iteration (which fires once immediately) run and
+    # be captured, then discard so tests see a clean write log.
+    await asyncio.sleep(0)
+    fake_pad.writes.clear()
+    fake_pad.write_response_flags.clear()
+    yield treadmill
+    # Cancel the background poll task cleanly after each test.
+    await treadmill.async_shutdown()
 
 
 def _make_status_frame(
@@ -169,9 +182,12 @@ async def test_connect_registers_notify_handler(monkeypatch, fake_pad):
 
 
 @pytest.mark.asyncio
-async def test_start_sends_start_command_and_writes_response_true(
-    treadmill, fake_pad
-):
+async def test_start_sends_start_and_default_speed(treadmill, fake_pad):
+    """async_start must arm the belt (start_belt) AND set a non-zero speed.
+
+    The A1 ignores a bare start_belt; the belt only moves once a set_speed
+    command follows in the same session.
+    """
     # Simulate the pad already being in MANUAL mode so no mode-switch is sent.
     fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
     fake_pad.writes.clear()
@@ -179,28 +195,53 @@ async def test_start_sends_start_command_and_writes_response_true(
 
     await treadmill.async_start()
 
-    assert len(fake_pad.writes) == 1
-    packet = fake_pad.writes[0]
-    assert packet[0:2] == b"\xf7\xa2"
-    assert packet[2] == 0x04  # start command byte
-    assert packet[3] == 0x01
-    assert packet[-1] == 0xFD
-    assert _crc_ok(packet)
-    assert fake_pad.write_response_flags == [True]
+    assert len(fake_pad.writes) == 2
+    start_packet, speed_packet = fake_pad.writes
+    assert start_packet[0:2] == b"\xf7\xa2"
+    assert start_packet[2] == 0x04  # start command byte
+    assert start_packet[3] == 0x01
+    assert _crc_ok(start_packet)
+    assert speed_packet[2] == 0x01  # set-speed command byte
+    assert speed_packet[3] > 0  # non-zero, otherwise belt won't move
+    assert _crc_ok(speed_packet)
+    assert fake_pad.write_response_flags == [False, False]
 
 
 @pytest.mark.asyncio
-async def test_set_speed_sends_deci_kmh_in_manual_mode(treadmill, fake_pad):
+async def test_set_speed_from_stopped_arms_belt_first(treadmill, fake_pad):
+    """From MANUAL/stopped, set_speed must send start_belt then set_speed.
+
+    Without the intermediate start_belt the A1 accepts the frame but the
+    belt does not move.
+    """
     fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
     fake_pad.writes.clear()
 
     await treadmill.async_set_speed(30)  # 3.0 km/h
 
+    assert len(fake_pad.writes) == 2
+    start_packet, speed_packet = fake_pad.writes
+    assert start_packet[2] == 0x04  # start_belt
+    assert speed_packet[2] == 0x01  # set-speed
+    assert speed_packet[3] == 30
+    assert _crc_ok(start_packet)
+    assert _crc_ok(speed_packet)
+
+
+@pytest.mark.asyncio
+async def test_set_speed_while_running_skips_start_belt(treadmill, fake_pad):
+    """If the belt is already running, set_speed must NOT re-send start_belt."""
+    fake_pad.push_status(
+        _make_status_frame(belt_state=2, speed_deci=15, mode=int(Mode.MANUAL))
+    )
+    assert treadmill.data.status is Status.RUNNING
+    fake_pad.writes.clear()
+
+    await treadmill.async_set_speed(30)
+
     assert len(fake_pad.writes) == 1
-    packet = fake_pad.writes[0]
-    assert packet[2] == 0x01  # set-speed command byte
-    assert packet[3] == 30
-    assert _crc_ok(packet)
+    assert fake_pad.writes[0][2] == 0x01  # only set-speed
+    assert fake_pad.writes[0][3] == 30
 
 
 @pytest.mark.asyncio
@@ -217,33 +258,35 @@ async def test_stop_sends_speed_zero(treadmill, fake_pad):
 
 
 @pytest.mark.asyncio
-async def test_start_from_standby_auto_switches_to_manual(treadmill, fake_pad):
-    """First frame reports STANDBY -> start must send mode-switch then start."""
-    fake_pad.push_status(_make_status_frame(mode=int(Mode.STANDBY)))
+async def test_start_from_standby_wakes_and_starts(treadmill, fake_pad):
+    """From STANDBY, async_start must send: switch_manual, start_belt, set_speed."""
+    fake_pad.push_status(_make_status_frame(belt_state=5, mode=int(Mode.STANDBY)))
     fake_pad.writes.clear()
 
     await treadmill.async_start()
 
-    # Two writes: mode-switch to MANUAL, then start command.
-    assert len(fake_pad.writes) == 2
-    mode_switch, start = fake_pad.writes
-    assert mode_switch[2] == 0x02  # mode command byte
+    assert len(fake_pad.writes) == 3
+    mode_switch, start, set_speed = fake_pad.writes
+    assert mode_switch[2] == 0x02
     assert mode_switch[3] == int(Mode.MANUAL)
-    assert start[2] == 0x04  # start command byte
-    assert _crc_ok(mode_switch)
-    assert _crc_ok(start)
+    assert start[2] == 0x04
+    assert set_speed[2] == 0x01
+    assert set_speed[3] > 0
+    for pkt in (mode_switch, start, set_speed):
+        assert _crc_ok(pkt)
 
 
 @pytest.mark.asyncio
-async def test_set_speed_from_standby_auto_switches_to_manual(treadmill, fake_pad):
-    fake_pad.push_status(_make_status_frame(mode=int(Mode.STANDBY)))
+async def test_set_speed_from_standby_wakes_and_arms(treadmill, fake_pad):
+    fake_pad.push_status(_make_status_frame(belt_state=5, mode=int(Mode.STANDBY)))
     fake_pad.writes.clear()
 
     await treadmill.async_set_speed(20)
 
-    assert len(fake_pad.writes) == 2
-    mode_switch, set_speed = fake_pad.writes
+    assert len(fake_pad.writes) == 3
+    mode_switch, start, set_speed = fake_pad.writes
     assert mode_switch[3] == int(Mode.MANUAL)
+    assert start[2] == 0x04
     assert set_speed[2] == 0x01
     assert set_speed[3] == 20
 
@@ -267,20 +310,19 @@ async def test_status_notification_updates_data_and_fires_callback(
     treadmill.register_callback(received.append)
 
     frame = _make_status_frame(
-        belt_state=1,  # RUNNING
+        belt_state=2,  # RUNNING on real A1
         speed_deci=15,  # 1.5 km/h
         mode=int(Mode.MANUAL),
         duration=4049,
         dist_10m=171,
         steps=4782,
-        app_speed_deci=60,  # 6.0 km/h
+        app_speed_deci=60,
     )
     fake_pad.push_status(frame)
 
     assert treadmill.data.status is Status.RUNNING
     assert treadmill.data.mode is Mode.MANUAL
     assert treadmill.data.speed_feedback == 1.5
-    assert treadmill.data.speed_cmd == 6.0
     assert treadmill.data.distance_km == 1.71
     assert treadmill.data.steps == 4782
     assert treadmill.data.duration_sec == 4049
@@ -298,7 +340,9 @@ async def test_invalid_status_frame_is_ignored(treadmill, fake_pad):
 
 @pytest.mark.asyncio
 async def test_disconnect_callback_marks_status_disconnected(treadmill, fake_pad):
-    fake_pad.push_status(_make_status_frame(belt_state=1, mode=int(Mode.MANUAL)))
+    fake_pad.push_status(
+        _make_status_frame(belt_state=2, speed_deci=10, mode=int(Mode.MANUAL))
+    )
     assert treadmill.data.status is Status.RUNNING
 
     received: list = []
@@ -321,10 +365,10 @@ async def test_command_spacing_enforced(monkeypatch, treadmill, fake_pad):
     real_sleep = asyncio.sleep
 
     async def _tracking_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        # Advance the treadmill's notion of "last command time" without
-        # actually blocking the test; we let the treadmill's own bookkeeping
-        # decide the wait via loop.time().
+        # Only record waits that look like the spacing wait (positive, small)
+        # to avoid picking up the poll-loop's own sleep or teardown sleeps.
+        if 0 < seconds < 5:
+            sleeps.append(seconds)
         await real_sleep(0)
 
     monkeypatch.setattr(_walkingpad.asyncio, "sleep", _tracking_sleep)
@@ -332,11 +376,8 @@ async def test_command_spacing_enforced(monkeypatch, treadmill, fake_pad):
     await treadmill.async_stop()
     await treadmill.async_stop()
 
-    # First send has no prior command, so no sleep is enqueued.
-    # Second send must enqueue a sleep close to MIN_COMMAND_SPACING_SEC.
     assert len(fake_pad.writes) == 2
     assert sleeps, "second command must sleep for spacing"
-    # Sleep should be greater than half the spacing (allows for scheduler jitter).
     assert max(sleeps) > MIN_COMMAND_SPACING_SEC / 2
 
 

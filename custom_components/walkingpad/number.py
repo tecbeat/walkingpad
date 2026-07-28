@@ -69,7 +69,7 @@ class WalkingPadSpeedNumber(WalkingPadEntity, NumberEntity):
     def native_value(self) -> float:
         if self._setpoint is not None:
             return self._setpoint
-        return round(self.data.speed_cmd / self._native_to_kmh, 2)
+        return round(self.data.speed_feedback / self._native_to_kmh, 2)
 
     async def async_set_native_value(self, value: float) -> None:
         speed_kmh = value * self._native_to_kmh

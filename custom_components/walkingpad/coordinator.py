@@ -18,9 +18,9 @@ _LOGGER = logging.getLogger(__name__)
 class WalkingPadCoordinator(DataUpdateCoordinator[TreadmillData]):
     """Bridges the treadmill's push notifications to HA entities.
 
-    The pad streams a status frame roughly every 750 ms while connected, so
-    there is no polling: every notification and every connect/disconnect pushes
-    fresh data to the entities.
+    The A1 does not stream status frames on its own. WalkingPadTreadmill runs
+    a ~1 s ask_stats poll loop while connected and pushes each parsed frame
+    here via the registered callback.
     """
 
     def __init__(

@@ -23,11 +23,18 @@ from bleak_retry_connector import (
     establish_connection,
 )
 
-from .const import CHARACTERISTIC_NOTIFY_STATE_UUID, CHARACTERISTIC_WRITE_UUID
+from .const import (
+    CHARACTERISTIC_NOTIFY_STATE_UUID,
+    CHARACTERISTIC_WRITE_UUID,
+    DEFAULT_START_SPEED_DECI_KMH,
+    POLL_INTERVAL_SEC,
+)
 from .protocol import (
     Mode,
     Status,
     TreadmillData,
+    ask_stats_command,
+    handshake_command,
     parse_state,
     set_speed_command_deci,
     start_command,
@@ -65,6 +72,7 @@ class WalkingPadTreadmill:
         self._expected_disconnect = False
         self._connected = False
         self._last_command_at: float = 0.0
+        self._poll_task: asyncio.Task[None] | None = None
 
     @property
     def address(self) -> str:
@@ -149,7 +157,35 @@ class WalkingPadTreadmill:
             self._expected_disconnect = False
             self._connected = True
             _LOGGER.debug("%s: connected", self.name)
+            # The A1 silently ignores start_belt/set_speed until it has seen
+            # this handshake frame at least once per connection.
+            try:
+                await self._write_raw(handshake_command())
+            except TRANSIENT_ERRORS as err:
+                _LOGGER.debug("%s: handshake failed: %s", self.name, err)
+            self._start_polling()
             self._fire_callbacks()
+
+    def _start_polling(self) -> None:
+        if self._poll_task is not None and not self._poll_task.done():
+            return
+        self._poll_task = asyncio.create_task(self._poll_loop())
+
+    async def _poll_loop(self) -> None:
+        """Poll the pad for status frames.
+
+        The A1 does not stream. It answers each ask_stats with exactly one
+        frame, so we must keep asking to keep entities up to date.
+        """
+        while self.connected:
+            try:
+                await self._async_send(ask_stats_command())
+            except TRANSIENT_ERRORS as err:
+                _LOGGER.debug("%s: poll error: %s", self.name, err)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("%s: unexpected poll error", self.name)
+                return
+            await asyncio.sleep(POLL_INTERVAL_SEC)
 
     async def async_ensure_connected_safe(self) -> None:
         try:
@@ -160,31 +196,50 @@ class WalkingPadTreadmill:
     async def _async_send(self, payload: bytes) -> None:
         async with self._operation_lock:
             await self.async_ensure_connected()
-            assert self._client is not None
             loop = asyncio.get_running_loop()
             wait = MIN_COMMAND_SPACING_SEC - (loop.time() - self._last_command_at)
             if wait > 0:
                 await asyncio.sleep(wait)
-            _LOGGER.debug("%s: writing %s", self.name, payload.hex())
-            await self._client.write_gatt_char(
-                CHARACTERISTIC_WRITE_UUID, payload, response=True
-            )
+            await self._write_raw(payload)
             self._last_command_at = loop.time()
+
+    async def _write_raw(self, payload: bytes) -> None:
+        """Write to fe02 without acquiring the operation lock or spacing.
+
+        Used from inside code paths that already hold the lock (or where
+        spacing is irrelevant, like the once-per-connection handshake).
+        """
+        assert self._client is not None
+        _LOGGER.debug("%s: writing %s", self.name, payload.hex())
+        await self._client.write_gatt_char(
+            CHARACTERISTIC_WRITE_UUID, payload, response=False
+        )
 
     async def async_switch_mode(self, mode: Mode) -> None:
         """Switch operating mode (STANDBY / MANUAL / AUTOMAT)."""
         await self._async_send(switch_mode_command(mode))
 
     async def async_start(self) -> None:
-        """Start the belt. Requires MANUAL or AUTOMAT mode first."""
-        if self._data.mode is Mode.STANDBY:
-            await self._async_send(switch_mode_command(Mode.MANUAL))
-        await self._async_send(start_command())
+        """Start the belt at DEFAULT_START_SPEED_DECI_KMH.
+
+        The A1 requires start_belt AND a non-zero set_speed to actually move.
+        A bare start_belt only puts the pad into 'ready' (belt_state=9). We
+        therefore always follow up with set_speed so pressing Start visibly
+        does something.
+        """
+        await self.async_set_speed(DEFAULT_START_SPEED_DECI_KMH)
 
     async def async_set_speed(self, speed_deci_kmh: int) -> None:
-        """Set target belt speed in tenths of km/h (0..60)."""
-        if self._data.mode is Mode.STANDBY:
+        """Set target belt speed in tenths of km/h (0..60).
+
+        If the belt is not already running, sends switch_mode(MANUAL) and
+        start_belt first. On the A1, set_speed alone is ignored unless the
+        belt has been armed via start_belt in the same 'session'.
+        """
+        if self._data.mode is not Mode.MANUAL:
             await self._async_send(switch_mode_command(Mode.MANUAL))
+        if self._data.status not in (Status.RUNNING, Status.STARTING):
+            await self._async_send(start_command())
         await self._async_send(set_speed_command_deci(speed_deci_kmh))
 
     async def async_stop(self) -> None:
@@ -194,6 +249,14 @@ class WalkingPadTreadmill:
     async def async_shutdown(self) -> None:
         """Tear down the connection (called on entry unload)."""
         self._expected_disconnect = True
+        poll_task = self._poll_task
+        self._poll_task = None
+        if poll_task is not None and not poll_task.done():
+            poll_task.cancel()
+            try:
+                await poll_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         client = self._client
         self._client = None
         self._connected = False

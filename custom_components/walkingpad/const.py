@@ -24,3 +24,12 @@ SPEED_STEP_KMH = 0.1
 
 # Any commanded speed at or below this (in km/h) is treated as a stop request.
 STOP_THRESHOLD_KMH = 0.1
+
+# The A1 does not stream status frames; we must ask for each one. ~1 s matches
+# the pad's minimum command spacing plus some headroom.
+POLL_INTERVAL_SEC = 1.0
+
+# Speed the pad ramps up to when async_start is called without a target
+# (e.g. via the Start button). 1.5 km/h is slow enough to be safe but fast
+# enough that the belt visibly moves so the user sees the command worked.
+DEFAULT_START_SPEED_DECI_KMH = 15

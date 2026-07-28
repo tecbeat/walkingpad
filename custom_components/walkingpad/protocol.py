@@ -10,9 +10,14 @@ Preferences packet:
 Checksum:
     byte[-2] = sum(byte[1:-2]) % 256
 
-Notification payloads (status stream, ~750 ms cadence):
+Notification payloads:
     Current status:  [0xf8, 0xa2, ...] length 20
     Last-run record: [0xf8, 0xa7, ...] length 20
+    Handshake reply: [0xf8, 0xa5, ...] length 20 (ignored)
+
+The A1 does NOT stream status frames spontaneously - it only replies to an
+explicit ``ask_stats`` command with a single frame. See
+:mod:`.walkingpad` for the polling loop.
 
 This module is intentionally free of Home Assistant and bleak imports so it can
 be unit tested in isolation.
@@ -40,13 +45,24 @@ KMH_PER_MPH = 1.609344
 
 
 class BeltState(IntEnum):
-    """Raw belt_state field values reported by the pad."""
+    """Raw belt_state field values reported by the pad.
+
+    Values verified against a real A1 unit and the ph4-walkingpad reference
+    frame. Different A1 firmware revisions report the "running" state as
+    either 1 or 2, so both are treated as running below.
+
+    - 0: idle (mode=MANUAL, belt stopped and ready)
+    - 1: running (ph4 reference frame)
+    - 2: running (observed on a real 2026 unit)
+    - 5: standby (mode=STANDBY, display off)
+    - 9: starting (after start_belt, before first set_speed)
+    """
 
     IDLE = 0
-    STARTING = 5
-    RUNNING = 1
-    STOPPING = 4
-    STANDBY = 9
+    RUNNING = 2
+    RUNNING_ALT = 1
+    STANDBY = 5
+    STARTING = 9
 
 
 class Mode(IntEnum):
@@ -84,7 +100,6 @@ class TreadmillData:
 
     status: Status = Status.DISCONNECTED
     mode: Mode = Mode.STANDBY
-    speed_cmd: float = 0.0  # target speed in km/h (last set)
     speed_feedback: float = 0.0  # current belt speed in km/h
     distance_km: float = 0.0
     steps: int = 0
@@ -144,19 +159,38 @@ def ask_stats_command() -> bytes:
     return _basic_command(0x00, 0x00)
 
 
+# Handshake payload (family 0xA5) sourced from ph4r05/ph4-walkingpad
+# PAYLOADS_255[0]. Without this, the A1 accepts only mode-switch commands and
+# silently ignores start_belt / set_speed.
+_HANDSHAKE_PAYLOAD = bytes(
+    [0xF7, 0xA5, 0x60, 0x4A, 0x4D, 0x93, 0x71, 0x29, 0xC9, 0xFD]
+)
+
+
+def handshake_command() -> bytes:
+    """Handshake that must be sent once after every fresh BLE connection."""
+    return _HANDSHAKE_PAYLOAD
+
+
 # --- State decoding --------------------------------------------------------
 
 
-def _decode_status(belt_state: int, mode: int) -> Status:
-    """Map raw belt_state + mode to the high-level Status."""
+def _decode_status(belt_state: int, mode: int, speed_feedback: float) -> Status:
+    """Map raw belt_state + mode to the high-level Status.
+
+    ``belt_state`` alone is ambiguous around the stop transition: the pad
+    still reports state=2 (RUNNING) for a second or two while the belt
+    ramps down to 0. We use ``speed_feedback`` as a tiebreaker so the
+    entity flips to STOPPED as soon as the belt is actually still.
+    """
     if mode == Mode.STANDBY:
         return Status.STANDBY
-    if belt_state == BeltState.RUNNING:
-        return Status.RUNNING
     if belt_state == BeltState.STARTING:
         return Status.STARTING
-    if belt_state == BeltState.STOPPING:
-        return Status.STOPPING
+    if belt_state in (BeltState.RUNNING, BeltState.RUNNING_ALT):
+        if speed_feedback < 0.1:
+            return Status.STOPPING
+        return Status.RUNNING
     return Status.STOPPED
 
 
@@ -172,12 +206,11 @@ def parse_state(payload: bytes | None) -> TreadmillData | None:
         return None
 
     belt_state = payload[2]
-    speed_deci = payload[3]  # tenths of km/h
+    speed_deci = payload[3]  # tenths of km/h, actual belt speed
     mode_raw = payload[4]
     duration_sec = _int_from_3bytes(payload[5:8])
     dist_10m = _int_from_3bytes(payload[8:11])  # in units of 10 m
     steps = _int_from_3bytes(payload[11:14])
-    app_speed_deci = payload[14]
     last_button = payload[16]
 
     try:
@@ -185,11 +218,11 @@ def parse_state(payload: bytes | None) -> TreadmillData | None:
     except ValueError:
         mode = Mode.STANDBY
 
+    speed_feedback = speed_deci / 10.0
     return TreadmillData(
-        status=_decode_status(belt_state, mode_raw),
+        status=_decode_status(belt_state, mode_raw, speed_feedback),
         mode=mode,
-        speed_cmd=app_speed_deci / 10.0,
-        speed_feedback=speed_deci / 10.0,
+        speed_feedback=speed_feedback,
         distance_km=dist_10m / 100.0,
         steps=steps,
         duration_sec=duration_sec,

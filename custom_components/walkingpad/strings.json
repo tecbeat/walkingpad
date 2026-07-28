@@ -73,6 +73,12 @@
       },
       "mode_standby": {
         "name": "Switch to standby"
+      },
+      "wake": {
+        "name": "Wake"
+      },
+      "sleep": {
+        "name": "Sleep"
       }
     }
   }

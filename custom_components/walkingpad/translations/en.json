@@ -53,7 +53,9 @@
       "stop": { "name": "Stop" },
       "toggle": { "name": "Start/Stop" },
       "mode_manual": { "name": "Switch to manual mode" },
-      "mode_standby": { "name": "Switch to standby" }
+      "mode_standby": { "name": "Switch to standby" },
+      "wake": { "name": "Wake" },
+      "sleep": { "name": "Sleep" }
     }
   }
 }

@@ -387,3 +387,49 @@ async def test_shutdown_stops_notifications_and_disconnects(treadmill, fake_pad)
 
     assert not fake_pad.is_connected
     assert fake_pad._notify_handler is None
+
+
+@pytest.mark.asyncio
+async def test_unexpected_disconnect_schedules_reconnect(monkeypatch, fake_pad):
+    """After a lost BLE session the treadmill must reconnect on its own.
+
+    Regression test: previously ``_disconnected_callback`` marked the state
+    as DISCONNECTED and stopped the poll loop, but never tried to reconnect.
+    HA entities stayed unavailable until the user reloaded the config entry.
+    """
+    connect_calls = 0
+
+    async def _fake_establish_connection(
+        client_class, ble_device, name, disconnected_callback, **_kwargs
+    ):
+        nonlocal connect_calls
+        connect_calls += 1
+        fake_pad.is_connected = True
+        fake_pad._disconnected_callback = disconnected_callback
+        return fake_pad
+
+    monkeypatch.setattr(
+        _walkingpad, "establish_connection", _fake_establish_connection
+    )
+    monkeypatch.setattr(_walkingpad, "POLL_INTERVAL_SEC", 3600)
+    monkeypatch.setattr(_walkingpad, "RECONNECT_INITIAL_DELAY_SEC", 0.05)
+    monkeypatch.setattr(_walkingpad, "RECONNECT_MAX_DELAY_SEC", 0.05)
+
+    treadmill = WalkingPadTreadmill(_make_ble_device())
+    await treadmill.async_ensure_connected()
+    assert connect_calls == 1
+    assert treadmill.connected
+
+    fake_pad.simulate_disconnect()
+    assert not treadmill.connected
+
+    # Give the scheduled reconnect task time to fire.
+    for _ in range(20):
+        if connect_calls >= 2:
+            break
+        await asyncio.sleep(0.05)
+
+    assert connect_calls >= 2, "expected auto-reconnect after unexpected disconnect"
+    assert treadmill.connected
+
+    await treadmill.async_shutdown()

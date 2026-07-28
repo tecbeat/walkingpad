@@ -51,6 +51,12 @@ TRANSIENT_ERRORS = (BleakError, BleakNotFoundError, TimeoutError, EOFError)
 # together (~750 ms is the app's own status poll cadence).
 MIN_COMMAND_SPACING_SEC = 0.7
 
+# Backoff schedule for auto-reconnect after an unexpected disconnect. Starts
+# small so a transient BLE hiccup recovers within seconds, then backs off so
+# a truly offline pad does not busy-poll the ESP32 proxy.
+RECONNECT_INITIAL_DELAY_SEC = 2.0
+RECONNECT_MAX_DELAY_SEC = 60.0
+
 TreadmillCallback = Callable[[TreadmillData], None]
 
 
@@ -73,6 +79,7 @@ class WalkingPadTreadmill:
         self._connected = False
         self._last_command_at: float = 0.0
         self._poll_task: asyncio.Task[None] | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
 
     @property
     def address(self) -> str:
@@ -128,9 +135,59 @@ class WalkingPadTreadmill:
         if self._expected_disconnect:
             _LOGGER.debug("%s: disconnected (expected)", self.name)
         else:
-            _LOGGER.debug("%s: disconnected unexpectedly", self.name)
+            _LOGGER.debug(
+                "%s: disconnected unexpectedly, scheduling reconnect", self.name
+            )
+            self._schedule_reconnect()
         self._data = replace(self._data, status=Status.DISCONNECTED)
         self._fire_callbacks()
+
+    def _schedule_reconnect(self) -> None:
+        """Kick off a background reconnect task if none is running.
+
+        Called from :meth:`_disconnected_callback` (a synchronous bleak
+        callback), so we cannot ``await`` here — we schedule the coroutine
+        on the running loop instead.
+        """
+        if self._expected_disconnect:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._reconnect_task = loop.create_task(self._reconnect_with_backoff())
+
+    def start_reconnect_in_background(self) -> None:
+        """Public entry point that mirrors :meth:`_schedule_reconnect`.
+
+        Used by the HA integration to keep the setup non-fatal when the pad
+        is not currently reachable (off / standby / out of range). A single
+        reconnect task runs in the background until the pad is reachable
+        again.
+        """
+        self._schedule_reconnect()
+
+    async def _reconnect_with_backoff(self) -> None:
+        """Keep trying to reconnect until it works or shutdown is requested."""
+        delay = RECONNECT_INITIAL_DELAY_SEC
+        while not self._expected_disconnect and not self.connected:
+            await asyncio.sleep(delay)
+            if self._expected_disconnect or self.connected:
+                return
+            try:
+                await self.async_ensure_connected()
+                _LOGGER.debug("%s: reconnect succeeded", self.name)
+                return
+            except TRANSIENT_ERRORS as err:
+                _LOGGER.debug(
+                    "%s: reconnect failed (%s), retrying in %.1fs",
+                    self.name,
+                    err,
+                    delay,
+                )
+            delay = min(delay * 2, RECONNECT_MAX_DELAY_SEC)
 
     async def async_ensure_connected(self) -> None:
         if self.connected:
@@ -249,14 +306,15 @@ class WalkingPadTreadmill:
     async def async_shutdown(self) -> None:
         """Tear down the connection (called on entry unload)."""
         self._expected_disconnect = True
-        poll_task = self._poll_task
-        self._poll_task = None
-        if poll_task is not None and not poll_task.done():
-            poll_task.cancel()
-            try:
-                await poll_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+        for task_attr in ("_poll_task", "_reconnect_task"):
+            task = getattr(self, task_attr)
+            setattr(self, task_attr, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
         client = self._client
         self._client = None
         self._connected = False

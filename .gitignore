@@ -27,3 +27,15 @@ venv/
 dev/homeassistant/*
 !dev/homeassistant/configuration.yaml
 !dev/homeassistant/.gitkeep
+
+# Local ESPHome dashboard state and secrets
+dev/esphome/.esphome/
+dev/esphome/secrets.yaml
+dev/esphome/*.bin
+dev/esphome/.device-builder*
+
+# Playwright MCP snapshots (from browser-driven manual tests)
+.playwright-mcp/
+
+.env
+test-secrets.env

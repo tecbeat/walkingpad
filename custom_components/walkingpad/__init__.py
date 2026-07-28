@@ -62,9 +62,18 @@ async def async_setup_entry(
     try:
         await treadmill.async_ensure_connected()
     except TRANSIENT_ERRORS as err:
-        raise ConfigEntryNotReady(
-            f"Could not connect to WalkingPad {address}: {err}"
-        ) from err
+        # Setup does NOT fail when the pad is currently unreachable (off,
+        # standby, out of range, blocked by the vendor app). Entities come up
+        # as "disconnected" and the treadmill's background reconnect keeps
+        # trying. As soon as the pad advertises again, the bluetooth callback
+        # below triggers a fresh reconnect attempt.
+        _LOGGER.info(
+            "%s not reachable at setup (%s). Coming up in disconnected state; "
+            "will reconnect automatically when the pad is available.",
+            address,
+            err,
+        )
+        treadmill.start_reconnect_in_background()
 
     coordinator = WalkingPadCoordinator(hass, entry, treadmill, address)
     coordinator.async_set_updated_data(treadmill.data)

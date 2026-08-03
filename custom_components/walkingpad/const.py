@@ -18,11 +18,15 @@ MANUFACTURER = "KingSmith"
 MODEL = "WalkingPad A1"
 
 # Speed slider bounds in km/h. The A1 hardware caps out at 6.0 km/h and
-# refuses anything below 0.5 km/h — the belt motor cannot maintain a
-# slower target speed and the pad silently clamps or drops the command.
-# The slider therefore only offers real speeds. Stopping the belt is the
-# Start/Stop button's job.
-MIN_SPEED_KMH = 0.5
+# has two lower bounds:
+#   - starting the belt from a full stop requires >= 0.7 km/h (the motor
+#     will not spin up below that), and
+#   - once running, the belt can be regulated down to 0.5 km/h.
+# The slider exposes 0.7 while stopped and 0.5 while running so the UI
+# reflects what the user can actually do at any moment. Stopping is the
+# Start/Stop button's job, not the slider's.
+MIN_SPEED_START_KMH = 0.7
+MIN_SPEED_RUNNING_KMH = 0.5
 MAX_SPEED_KMH = 6.0
 SPEED_STEP_KMH = 0.1
 

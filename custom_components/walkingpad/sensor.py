@@ -23,19 +23,10 @@ from homeassistant.helpers.typing import StateType
 
 from . import WalkingPadConfigEntry
 from .entity import WalkingPadEntity
-from .protocol import STATUS_STR, TreadmillData
+from .protocol import Mode, STATUS_STR, TreadmillData
 
-STATE_OPTIONS = [
-    "stopped",
-    "running",
-    "starting",
-    "stopping",
-    "standby",
-    "disconnected",
-]
-
-MODE_OPTIONS = ["automat", "manual", "standby"]
-MODE_STR = {0: "automat", 1: "manual", 2: "standby"}
+STATE_OPTIONS = list(STATUS_STR.values())
+MODE_OPTIONS = [mode.name.lower() for mode in Mode]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -62,7 +53,7 @@ SENSORS: tuple[WalkingPadSensorEntityDescription, ...] = (
         # Redundant with the Mode select entity; keep as diagnostic for
         # debugging but hide by default.
         entity_registry_enabled_default=False,
-        value_fn=lambda data: MODE_STR.get(int(data.mode), "standby"),
+        value_fn=lambda data: data.mode.name.lower(),
     ),
     WalkingPadSensorEntityDescription(
         key="speed_feedback",

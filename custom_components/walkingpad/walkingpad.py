@@ -135,11 +135,21 @@ class WalkingPadTreadmill:
     def set_preferred_mode(self, mode: Mode) -> None:
         """Store the mode the pad should be in for walking commands.
 
+        Only MANUAL or AUTOMAT make sense here — STANDBY is not a
+        walking mode. Callers passing STANDBY are silently coerced to
+        MANUAL so the walking flow always has a valid target.
+
         This does NOT send anything to the pad — the mode select entity
         sends switch_mode itself via async_switch_mode. It only records
-        the preference so subsequent start/set_speed calls know whether
-        a switch_mode is needed.
+        the preference so subsequent start_walking / set_speed calls
+        know whether a switch_mode is needed.
         """
+        if mode is Mode.STANDBY:
+            _LOGGER.debug(
+                "%s: refusing to set STANDBY as preferred walking mode, using MANUAL",
+                self.name,
+            )
+            mode = Mode.MANUAL
         self._preferred_mode = mode
 
     def set_ble_device_and_advertisement_data(
@@ -172,28 +182,40 @@ class WalkingPadTreadmill:
         # status on top of whatever the pad currently reports. Telemetry
         # (speed, distance, steps, mode) still comes from the pad — only
         # the status field is overridden.
-        try:
-            loop = asyncio.get_running_loop()
-            now = loop.time()
-        except RuntimeError:
-            now = 0.0
-        if self._optimistic_status is not None and now < self._optimistic_until:
-            data = replace(data, status=self._optimistic_status)
-        elif self._optimistic_status is not None:
-            self._optimistic_status = None
+        if self._optimistic_status is not None:
+            try:
+                now = asyncio.get_running_loop().time()
+            except RuntimeError:
+                now = self._optimistic_until  # force cleanup
+            if now < self._optimistic_until:
+                data = replace(data, status=self._optimistic_status)
+            else:
+                self._optimistic_status = None
         self._data = data
         self._fire_callbacks()
 
     def _pin_optimistic_status(self, status: Status) -> None:
+        # Set the deadline BEFORE the status flag so a concurrent
+        # notification handler that reads them cannot see the new
+        # status paired with a stale (expired) deadline.
         try:
             loop = asyncio.get_running_loop()
             self._optimistic_until = loop.time() + OPTIMISTIC_STATUS_WINDOW_SEC
         except RuntimeError:
+            # No running loop (extremely unlikely — every call site is
+            # inside an async coroutine). Fall back to "not pinned" so
+            # we don't leave a stale override lying around.
+            self._optimistic_status = None
             self._optimistic_until = 0.0
+            return
         self._optimistic_status = status
 
     def _disconnected_callback(self, _client: BleakClientWithServiceCache) -> None:
         self._connected = False
+        # Drop any optimistic status pin — the pad session is gone, and
+        # once a reconnect happens we want the pad's real status to
+        # show up immediately without a stale STARTING/STOPPING override.
+        self._optimistic_status = None
         if self._expected_disconnect:
             _LOGGER.debug("%s: disconnected (expected)", self.name)
         else:
@@ -283,7 +305,10 @@ class WalkingPadTreadmill:
             except TRANSIENT_ERRORS as err:
                 _LOGGER.debug("%s: handshake failed: %s", self.name, err)
             self._start_polling()
-            self._fire_callbacks()
+            # No callback fire here: the poll loop starts immediately and
+            # its first ask_stats reply triggers _notification_handler,
+            # which pushes real telemetry to the callbacks. Firing here
+            # would only redistribute the stale DISCONNECTED snapshot.
 
     def _start_polling(self) -> None:
         if self._poll_task is not None and not self._poll_task.done():
@@ -337,10 +362,14 @@ class WalkingPadTreadmill:
     async def async_switch_mode(self, mode: Mode) -> None:
         """Switch operating mode (STANDBY / MANUAL / AUTOMAT).
 
-        Also updates the preferred mode so subsequent walking commands
-        don't switch it back.
+        Updates the preferred *walking* mode (MANUAL or AUTOMAT) as a
+        side effect so subsequent start_walking calls don't switch it
+        back. Sending STANDBY here does NOT change the preferred mode
+        — it is treated as a "put the pad to sleep now" action and the
+        walking preference is preserved for the next wake.
         """
-        self._preferred_mode = mode
+        if mode is not Mode.STANDBY:
+            self._preferred_mode = mode
         await self._async_send(switch_mode_command(mode))
 
     async def async_start_walking(self, speed_deci_kmh: int) -> None:

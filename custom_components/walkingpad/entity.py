@@ -22,19 +22,16 @@ class WalkingPadEntity(CoordinatorEntity[WalkingPadCoordinator]):
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: WalkingPadCoordinator) -> None:
-        super().__init__(coordinator)
-        self._address = coordinator.address
-
     @property
     def data(self) -> TreadmillData:
         return self.coordinator.data
 
     @property
     def device_info(self) -> DeviceInfo:
+        address = self.coordinator.address
         return DeviceInfo(
-            connections={(CONNECTION_BLUETOOTH, self._address)},
-            identifiers={(DOMAIN, self._address)},
+            connections={(CONNECTION_BLUETOOTH, address)},
+            identifiers={(DOMAIN, address)},
             name=self.coordinator.entry.title or DEFAULT_NAME,
             manufacturer=MANUFACTURER,
             model=MODEL,
@@ -42,9 +39,9 @@ class WalkingPadEntity(CoordinatorEntity[WalkingPadCoordinator]):
 
     @property
     def available(self) -> bool:
-        # Rely on the coordinator: as long as it has received data at
-        # least once (which happens synchronously in async_setup_entry
-        # via async_set_updated_data), entities stay available. STANDBY
-        # and DISCONNECTED are represented via the values themselves,
-        # not via the availability flag.
+        # STANDBY and DISCONNECTED are normal states, not errors — they
+        # are represented via the sensor values themselves, not via the
+        # availability flag. Entities stay available as long as the
+        # coordinator has received data at least once (which happens
+        # synchronously in async_setup_entry via async_set_updated_data).
         return self.coordinator.last_update_success

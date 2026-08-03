@@ -79,7 +79,7 @@ stay editable so the user can pre-configure the next walk.
 
 | Entity | Type | Purpose |
 |---|---|---|
-| Speed | `number` (slider) | Target speed for the next walk (or the live setpoint while walking). Always editable, also when the pad is asleep. Adjusting it while the belt is running sends one BLE write to the pad. |
+| Speed | `number` (slider, 0.5..6.0 km/h) | Target speed for the next walk (or the live setpoint while walking). Always editable, also when the pad is asleep. Adjusting it while the belt is running sends one BLE write to the pad. The slider never starts or stops the belt — that is what Start/Stop is for. |
 | Mode | `select` | Preferred walking mode: `manual` or `automat`. Persists across HA restarts. Applied on the next wake if the pad is currently asleep. |
 | Start/Stop | `button` | Toggle. If the belt is stopped: wake the pad if needed, wait 1 s for the belt controller to settle, arm the belt, then set the current slider speed. If the belt is running: stop it. Concurrent clicks during the start sequence are ignored so the pad never receives an overlapping second sequence. |
 | State | `sensor` | `stopped` / `running` / `starting` / `stopping` / `standby` / `disconnected`. |
@@ -120,7 +120,9 @@ state:
   One beep.
 - Moving the **Speed** slider while the belt is running → one
   `set_speed` → one beep. Moving it while stopped is silent — the pad
-  only sees the new setpoint on the next Start/Stop press.
+  only sees the new setpoint on the next Start/Stop press. The slider
+  is limited to real walking speeds (0.5..6.0 km/h); the belt motor
+  does not run below 0.5 km/h.
 
 ## Troubleshooting
 

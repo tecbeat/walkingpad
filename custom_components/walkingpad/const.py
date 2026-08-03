@@ -17,21 +17,22 @@ DEFAULT_NAME = "WalkingPad Treadmill"
 MANUFACTURER = "KingSmith"
 MODEL = "WalkingPad A1"
 
-# Speed slider bounds in km/h. The A1 hardware caps out at 6.0 km/h.
-MIN_SPEED_KMH = 0.0
+# Speed slider bounds in km/h. The A1 hardware caps out at 6.0 km/h and
+# refuses anything below 0.5 km/h — the belt motor cannot maintain a
+# slower target speed and the pad silently clamps or drops the command.
+# The slider therefore only offers real speeds. Stopping the belt is the
+# Start/Stop button's job.
+MIN_SPEED_KMH = 0.5
 MAX_SPEED_KMH = 6.0
 SPEED_STEP_KMH = 0.1
-
-# Any commanded speed at or below this (in km/h) is treated as a stop request.
-STOP_THRESHOLD_KMH = 0.1
 
 # The A1 does not stream status frames; we must ask for each one. ~1 s matches
 # the pad's minimum command spacing plus some headroom.
 POLL_INTERVAL_SEC = 1.0
 
-# Speed the pad ramps up to when async_start is called without a target
-# (e.g. via the Start button). 1.5 km/h is slow enough to be safe but fast
-# enough that the belt visibly moves so the user sees the command worked.
+# Default target speed used the first time a fresh install starts a walk
+# (before the user has moved the slider). 1.5 km/h is a comfortable slow
+# walking pace.
 DEFAULT_START_SPEED_DECI_KMH = 15
 
 # Config-entry options key used to persist the user's preferred walking mode

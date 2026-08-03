@@ -1,21 +1,22 @@
 """Select platform (walking mode) for the WalkingPad treadmill.
 
-The pad supports three raw modes: STANDBY, MANUAL, and AUTOMAT. STANDBY is
-exposed as the Power switch (`switch.walkingpad_power`); the select entity
-therefore only offers the two walking modes:
+The pad supports three raw modes: STANDBY, MANUAL, and AUTOMAT. STANDBY
+is the pad-off state, which the integration reaches transparently — it
+is not selectable by the user. The select therefore only offers the two
+walking modes:
 
 - ``manual``: user controls speed via the slider or Start button.
 - ``automat``: pad picks speed based on foot position on the belt.
 
-The selected mode is persisted on the config entry so it survives Home
-Assistant restarts, and it is the mode the pad is woken into when the Power
-switch is turned on.
+The selection is persisted on the config entry so it survives Home
+Assistant restarts, and it is the mode the pad is woken into on the
+next Start/Stop press.
 """
 
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import WalkingPadConfigEntry
@@ -43,7 +44,7 @@ async def async_setup_entry(
 
 
 class WalkingPadModeSelect(WalkingPadEntity, SelectEntity):
-    """Dropdown that mirrors and sets the pad's walking mode."""
+    """Dropdown that mirrors and sets the preferred walking mode."""
 
     _attr_translation_key = "mode"
     _attr_options = [MODE_MANUAL, MODE_AUTOMAT]
@@ -56,14 +57,19 @@ class WalkingPadModeSelect(WalkingPadEntity, SelectEntity):
     @property
     def available(self) -> bool:
         # Always available: the user must be able to preselect the mode
-        # even while the pad is asleep or unreachable. The choice is
-        # persisted on the config entry and applied on the next wake.
+        # even while the pad is asleep or unreachable.
         return True
 
     @property
-    def current_option(self) -> str | None:
+    def current_option(self) -> str:
+        # preferred_mode is guaranteed to be MANUAL or AUTOMAT
+        # (set_preferred_mode is only called with those two, and the
+        # config-entry loader in __init__.py validates the stored value).
+        # STANDBY would be a bug — fall back to MANUAL so the dropdown
+        # always has a valid option and the user never sees an empty
+        # value.
         preferred = self.coordinator.treadmill.preferred_mode
-        return MODE_TO_OPTION.get(preferred)
+        return MODE_TO_OPTION.get(preferred, MODE_MANUAL)
 
     async def async_select_option(self, option: str) -> None:
         mode = OPTION_TO_MODE[option]
@@ -84,13 +90,3 @@ class WalkingPadModeSelect(WalkingPadEntity, SelectEntity):
         ):
             await self.coordinator.treadmill.async_switch_mode(mode)
         self.async_write_ha_state()
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        # If the pad reports a mode we didn't ask for (e.g. user pressed a
-        # button on the pad itself), reflect it as the preferred mode so
-        # the dropdown stays in sync — but only for walking modes.
-        current = self.data.mode
-        if current in (Mode.MANUAL, Mode.AUTOMAT):
-            self.coordinator.treadmill.set_preferred_mode(current)
-        super()._handle_coordinator_update()

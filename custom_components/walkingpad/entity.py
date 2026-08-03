@@ -7,18 +7,17 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEFAULT_NAME, DOMAIN, MANUFACTURER, MODEL
 from .coordinator import WalkingPadCoordinator
-from .protocol import Mode, TreadmillData
+from .protocol import TreadmillData
 
 
 class WalkingPadEntity(CoordinatorEntity[WalkingPadCoordinator]):
     """Common base wiring device info and availability.
 
-    Default availability is "pad is awake": BLE connected AND not in
-    STANDBY. That way, walking-related controls (speed slider, start/stop
-    buttons, telemetry sensors) go ``unavailable`` when the pad is off or
-    unreachable — which HA renders as a greyed-out control, not an error.
-    Sub-classes that must stay available in more states (Power switch,
-    Mode select, State sensor) override :attr:`available` themselves.
+    Entities are considered available as long as the coordinator has
+    received data at least once. STANDBY and DISCONNECTED are normal
+    states, not errors: the pad-off case must not paint the whole
+    device red in Home Assistant. Sub-classes that need stricter
+    availability override :attr:`available` themselves.
     """
 
     _attr_has_entity_name = True
@@ -43,8 +42,9 @@ class WalkingPadEntity(CoordinatorEntity[WalkingPadCoordinator]):
 
     @property
     def available(self) -> bool:
-        return (
-            super().available
-            and self.coordinator.treadmill.connected
-            and self.data.mode is not Mode.STANDBY
-        )
+        # Rely on the coordinator: as long as it has received data at
+        # least once (which happens synchronously in async_setup_entry
+        # via async_set_updated_data), entities stay available. STANDBY
+        # and DISCONNECTED are represented via the values themselves,
+        # not via the availability flag.
+        return self.coordinator.last_update_success

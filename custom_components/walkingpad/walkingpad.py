@@ -26,7 +26,6 @@ from bleak_retry_connector import (
 from .const import (
     CHARACTERISTIC_NOTIFY_STATE_UUID,
     CHARACTERISTIC_WRITE_UUID,
-    DEFAULT_START_SPEED_DECI_KMH,
     POLL_INTERVAL_SEC,
 )
 from .protocol import (
@@ -50,6 +49,19 @@ TRANSIENT_ERRORS = (BleakError, BleakNotFoundError, TimeoutError, EOFError)
 # Minimum spacing between commands. The A1 drops commands sent too close
 # together (~750 ms is the app's own status poll cadence).
 MIN_COMMAND_SPACING_SEC = 0.7
+
+# Pause between waking the pad from STANDBY and sending walking commands.
+# The A1 needs a moment to bring the belt controller online after a mode
+# switch; sending start_belt immediately after switch_mode(MANUAL) can be
+# silently dropped.
+WAKE_SETTLE_DELAY_SEC = 1.0
+
+# Grace window after issuing async_start_walking / async_stop during which
+# the pad's own status frames are overridden with the intended status.
+# The A1 keeps reporting the previous state for a second or two while the
+# belt spins up / down, and without this window a rapid second toggle
+# click would race the poll loop and re-trigger the wrong action.
+OPTIMISTIC_STATUS_WINDOW_SEC = 3.0
 
 # Backoff schedule for auto-reconnect after an unexpected disconnect. Starts
 # small so a transient BLE hiccup recovers within seconds, then backs off so
@@ -84,6 +96,17 @@ class WalkingPadTreadmill:
         # Users can change this via the mode select entity; the integration
         # will only send switch_mode when the pad's current mode differs.
         self._preferred_mode: Mode = Mode.MANUAL
+        # Serialises the multi-step start sequence (wake → wait → arm →
+        # set_speed) so a mid-sequence toggle click is ignored instead of
+        # queueing a second, overlapping sequence.
+        self._toggle_lock = asyncio.Lock()
+        # Optimistic status pinning. When the user starts or stops the
+        # belt, the pad keeps reporting the previous status for a second
+        # or two. During that grace window we overrule the pad's status
+        # frames with the intended one so the UI (and the toggle button)
+        # sees the change instantly instead of racing the poll loop.
+        self._optimistic_status: Status | None = None
+        self._optimistic_until: float = 0.0
 
     @property
     def address(self) -> str:
@@ -145,8 +168,29 @@ class WalkingPadTreadmill:
                 "%s: ignoring non-status payload (%d bytes)", self.name, len(payload)
             )
             return
+        # During the optimistic status window, keep the user-intended
+        # status on top of whatever the pad currently reports. Telemetry
+        # (speed, distance, steps, mode) still comes from the pad — only
+        # the status field is overridden.
+        try:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+        except RuntimeError:
+            now = 0.0
+        if self._optimistic_status is not None and now < self._optimistic_until:
+            data = replace(data, status=self._optimistic_status)
+        elif self._optimistic_status is not None:
+            self._optimistic_status = None
         self._data = data
         self._fire_callbacks()
+
+    def _pin_optimistic_status(self, status: Status) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            self._optimistic_until = loop.time() + OPTIMISTIC_STATUS_WINDOW_SEC
+        except RuntimeError:
+            self._optimistic_until = 0.0
+        self._optimistic_status = status
 
     def _disconnected_callback(self, _client: BleakClientWithServiceCache) -> None:
         self._connected = False
@@ -299,60 +343,69 @@ class WalkingPadTreadmill:
         self._preferred_mode = mode
         await self._async_send(switch_mode_command(mode))
 
-    async def async_wake(self) -> None:
-        """Wake the pad from standby into the preferred walking mode.
+    async def async_start_walking(self, speed_deci_kmh: int) -> None:
+        """Start the belt at ``speed_deci_kmh``, waking the pad if needed.
 
-        A no-op if the pad is already awake. This is what the Power switch
-        turns on. One command, one beep.
+        This is the single "start" entry point exposed to the UI. It
+        does exactly what the physical remote does:
+
+        1. If the pad is in STANDBY, wake it into the preferred mode
+           (one BLE write, one pad beep) and wait a moment for the belt
+           controller to settle. Without the pause, ``start_belt`` after
+           a fresh wake is often silently dropped.
+        2. Arm the belt (``start_belt``) unless it is already running.
+        3. Send the target speed.
+
+        Steady-state (pad already awake, belt already running) reduces
+        to a single ``set_speed`` write.
+
+        The whole sequence is guarded by an asyncio.Lock so a second
+        click while the first sequence is still in flight is dropped —
+        no queued double-start, no chaos.
         """
-        if self._data.mode is Mode.STANDBY:
-            await self._async_send(switch_mode_command(self._preferred_mode))
-
-    async def async_sleep(self) -> None:
-        """Put the pad into standby.
-
-        A no-op if the pad is already in standby. One command, one beep.
-        """
-        if self._data.mode is not Mode.STANDBY:
-            await self._async_send(switch_mode_command(Mode.STANDBY))
-
-    async def async_start(self) -> None:
-        """Start the belt at DEFAULT_START_SPEED_DECI_KMH.
-
-        Delegates to async_set_speed, which already handles the arm-
-        before-set_speed dance conditionally. Pressing Start on an awake
-        pad in MANUAL mode results in a single beep.
-        """
-        await self.async_set_speed(DEFAULT_START_SPEED_DECI_KMH)
+        if self._toggle_lock.locked():
+            _LOGGER.debug("%s: start ignored, sequence already running", self.name)
+            return
+        async with self._toggle_lock:
+            if self._data.mode is Mode.STANDBY:
+                await self._async_send(switch_mode_command(self._preferred_mode))
+                await asyncio.sleep(WAKE_SETTLE_DELAY_SEC)
+            elif self._data.mode is not self._preferred_mode:
+                await self._async_send(switch_mode_command(self._preferred_mode))
+            if self._data.status not in (Status.RUNNING, Status.STARTING):
+                await self._async_send(start_command())
+            await self._async_send(set_speed_command_deci(speed_deci_kmh))
+            # Optimistically pin local status to STARTING so a rapid
+            # second toggle from the UI is interpreted as "stop", not
+            # "start again". The pad's own status frames still update
+            # every other field, but the status is held for the grace
+            # window so the poll loop cannot flip it back.
+            self._pin_optimistic_status(Status.STARTING)
+            self._data = replace(self._data, status=Status.STARTING)
+            self._fire_callbacks()
 
     async def async_set_speed(self, speed_deci_kmh: int) -> None:
-        """Set target belt speed in tenths of km/h (0..60).
+        """Set target belt speed on a belt that is already running.
 
-        Only sends what is necessary for the current pad state:
-
-        - If the pad is in STANDBY, wake it into the preferred walking mode
-          first (this is the "auto-wake" fallback so setting a speed on a
-          sleeping pad still works — the intended flow is that the user
-          hits the Power switch first).
-        - If the pad's current mode differs from the preferred walking
-          mode, switch it. In steady state (pad already awake in the right
-          mode) no switch_mode is sent, so no extra beep.
-        - If the belt has not been armed yet (status not RUNNING/STARTING),
-          send start_belt. The A1 ignores set_speed until it has been
-          armed once per session.
-        - Then send the set_speed itself.
+        Assumes the belt is already armed. If it is not, the pad simply
+        ignores this — the caller should use :meth:`async_start_walking`
+        to arm+start. This is the single-write "change speed while
+        walking" path that produces exactly one beep.
         """
-        if self._data.mode is Mode.STANDBY:
-            await self._async_send(switch_mode_command(self._preferred_mode))
-        elif self._data.mode is not self._preferred_mode:
-            await self._async_send(switch_mode_command(self._preferred_mode))
-        if self._data.status not in (Status.RUNNING, Status.STARTING):
-            await self._async_send(start_command())
         await self._async_send(set_speed_command_deci(speed_deci_kmh))
 
     async def async_stop(self) -> None:
-        """Stop the belt."""
+        """Stop the belt.
+
+        Optimistically pins local status to STOPPING so a rapid second
+        toggle press does not race the pad's own status notification —
+        the pad keeps reporting RUNNING for ~1 s after the belt starts
+        decelerating.
+        """
         await self._async_send(stop_command())
+        self._pin_optimistic_status(Status.STOPPING)
+        self._data = replace(self._data, status=Status.STOPPING)
+        self._fire_callbacks()
 
     async def async_shutdown(self) -> None:
         """Tear down the connection (called on entry unload)."""

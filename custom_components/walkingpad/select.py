@@ -55,10 +55,10 @@ class WalkingPadModeSelect(WalkingPadEntity, SelectEntity):
 
     @property
     def available(self) -> bool:
-        # Available regardless of belt state (also when the pad is only in
-        # STANDBY) so the user can preselect the mode before waking the pad.
-        # Only unavailable when the BLE connection is entirely gone.
-        return self.coordinator.treadmill.connected
+        # Always available: the user must be able to preselect the mode
+        # even while the pad is asleep or unreachable. The choice is
+        # persisted on the config entry and applied on the next wake.
+        return True
 
     @property
     def current_option(self) -> str | None:
@@ -74,11 +74,14 @@ class WalkingPadModeSelect(WalkingPadEntity, SelectEntity):
             options={**self._entry.options, CONF_PREFERRED_MODE: int(mode)},
         )
         self.coordinator.treadmill.set_preferred_mode(mode)
-        # Only send switch_mode to the pad if it is currently awake — if
-        # it is in STANDBY, the mode kicks in when the user turns the
-        # Power switch on. This keeps a mode change from unintentionally
-        # waking the pad.
-        if self.data.mode is not Mode.STANDBY:
+        # Only push switch_mode to the pad if it is currently awake and
+        # reachable. In STANDBY or when disconnected the choice is
+        # stored silently and applied on the next wake — no unwanted
+        # beep, no error when the pad is not reachable.
+        if (
+            self.coordinator.treadmill.connected
+            and self.data.mode is not Mode.STANDBY
+        ):
             await self.coordinator.treadmill.async_switch_mode(mode)
         self.async_write_ha_state()
 

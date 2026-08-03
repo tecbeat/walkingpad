@@ -59,16 +59,8 @@
       }
     },
     "button": {
-      "start": {
-        "name": "Start"
-      },
-      "stop": {
-        "name": "Stop"
-      }
-    },
-    "switch": {
-      "power": {
-        "name": "Power"
+      "toggle": {
+        "name": "Start/Stop"
       }
     },
     "select": {

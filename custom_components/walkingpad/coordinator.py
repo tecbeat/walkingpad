@@ -34,6 +34,11 @@ class WalkingPadCoordinator(DataUpdateCoordinator[TreadmillData]):
         self.entry = entry
         self.treadmill = treadmill
         self.address = address
+        # Target speed in tenths of km/h, set by the number entity's slider
+        # and read by the toggle button when the user starts a walk. This
+        # is the "what speed should the belt aim for" value; the pad's
+        # own current speed is exposed separately via the speed sensor.
+        self.target_speed_deci_kmh: int | None = None
         self._unregister = treadmill.register_callback(self._handle_update)
 
     @callback

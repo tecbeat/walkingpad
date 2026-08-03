@@ -124,16 +124,5 @@ class WalkingPadSensor(WalkingPadEntity, SensorEntity):
         self._attr_unique_id = f"{coordinator.address}_{description.key}"
 
     @property
-    def available(self) -> bool:
-        # The State and Mode sensors are the whole point of the "pad is
-        # off but not broken" story — they must stay available whenever
-        # the coordinator has any data at all, even when the pad is in
-        # STANDBY or disconnected (in which case they render as
-        # "standby" / "disconnected" values, not "unavailable").
-        if self.entity_description.key in ("state", "mode"):
-            return self.coordinator.last_update_success
-        return super().available
-
-    @property
     def native_value(self) -> StateType:
         return self.entity_description.value_fn(self.data)

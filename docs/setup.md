@@ -70,20 +70,51 @@ If HA's Bluetooth integration is enabled (it is under
 
 ## Entities
 
+The pad is treated as normally-off: unplugged, powered down, or in
+`standby` is a **regular state**, not an error. Only Power, Mode, and
+the State sensor stay usable in that state; every other control becomes
+`unavailable` (greyed-out) until the pad is awake.
+
 | Entity | Type | Purpose |
 |---|---|---|
-| Speed | `number` (slider) | Set target speed. Non-zero starts the belt; 0 stops it. |
+| Power | `switch` | On = wake pad into the selected walking mode; Off = put pad into `standby`. Always available (also when the pad is unreachable). |
+| Mode | `select` | Preferred walking mode: `manual` or `automat`. Persists across restarts. Applied when the pad is next woken. |
+| State | `sensor` | `stopped` / `running` / `starting` / `stopping` / `standby` / `disconnected`. Always available. |
+| Speed | `number` (slider) | Set target speed. Non-zero starts the belt; 0 stops it. Unavailable when the pad is asleep. |
 | Speed | `sensor` | Live belt speed. |
-| State | `sensor` | `stopped` / `running` / `starting` / `stopping` / `standby` / `disconnected` |
-| Mode | `sensor` (diagnostic) | `automat` / `manual` / `standby` |
 | Distance | `sensor` | Session distance in km. |
 | Duration | `sensor` | Session duration in seconds. |
 | Steps | `sensor` | Step count. |
-| Start | `button` | Start the belt. |
+| Start | `button` | Start the belt at a safe default speed. Single command, single beep. |
 | Stop | `button` | Stop the belt. |
-| Start/Stop | `button` | Toggles depending on current state. |
-| Switch to manual mode | `button` (disabled by default) | Explicit mode switch. |
-| Switch to standby | `button` (disabled by default) | Explicit mode switch. |
+| Mode (raw) | `sensor` (diagnostic, disabled by default) | Debug view on the pad's own mode field. |
+
+### Why the pad is normally-off
+
+The A1 draws non-trivial standby power over the mains switch on the
+side of the treadmill. Most users plug it in only when they intend to
+walk. Home Assistant reflects that: an unplugged / unpowered pad shows
+up with the Power switch as **off**, the State sensor as
+`disconnected`, and every walking control as `unavailable`. There is no
+error, no failed integration, no red notification — just an off
+appliance.
+
+### The single-beep start flow
+
+The A1 emits one beep for every accepted BLE command. The integration
+therefore only sends what is strictly necessary for the pad's current
+state:
+
+- Pressing **Power = On** while the pad is in standby → one
+  `switch_mode(preferred)` → one beep.
+- Selecting a different **Mode** while the pad is awake → one
+  `switch_mode` → one beep. Selecting the mode while the pad is in
+  standby stores the preference silently and applies it on next wake.
+- Pressing **Start** on an awake pad in the preferred mode → one
+  `start_belt` + one `set_speed` → one beep pair (the pad requires the
+  belt to be armed before it will accept a target speed).
+- Moving the **Speed** slider while the belt is running → one
+  `set_speed` → one beep.
 
 ## Troubleshooting
 
@@ -105,10 +136,12 @@ If HA's Bluetooth integration is enabled (it is under
 
 ### Commands don't take effect
 
-- The A1 must be in **manual mode** to accept speed changes. The integration
-  auto-switches to manual on the first start/set-speed command. If the pad
-  is unresponsive, use the "Switch to manual mode" button once (enable it
-  first if it's hidden as a diagnostic entity).
+- The A1 must be **awake** (not in `standby`) to accept speed changes.
+  Turn the **Power** switch on first, or set the **Mode** select before
+  waking.
+- The A1 rejects any walking command while it thinks it is still in
+  `standby`. Waking is one `switch_mode` command; the integration sends
+  it as part of turning the Power switch on.
 
 ## Local development
 

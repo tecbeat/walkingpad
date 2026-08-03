@@ -50,12 +50,19 @@
     },
     "button": {
       "start": { "name": "Start" },
-      "stop": { "name": "Stop" },
-      "toggle": { "name": "Start/Stop" },
-      "mode_manual": { "name": "Switch to manual mode" },
-      "mode_standby": { "name": "Switch to standby" },
-      "wake": { "name": "Wake" },
-      "sleep": { "name": "Sleep" }
+      "stop": { "name": "Stop" }
+    },
+    "switch": {
+      "power": { "name": "Power" }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "manual": "Manual",
+          "automat": "Automatic"
+        }
+      }
     }
   }
 }

@@ -23,13 +23,20 @@ from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
+from .const import CONF_PREFERRED_MODE, DOMAIN
 from .coordinator import WalkingPadCoordinator
+from .protocol import Mode
 from .walkingpad import TRANSIENT_ERRORS, WalkingPadTreadmill
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BUTTON, Platform.NUMBER, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BUTTON,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 
 @dataclass
@@ -59,6 +66,16 @@ async def async_setup_entry(
         )
 
     treadmill = WalkingPadTreadmill(ble_device)
+    stored_mode = entry.options.get(CONF_PREFERRED_MODE)
+    if stored_mode is not None:
+        try:
+            treadmill.set_preferred_mode(Mode(int(stored_mode)))
+        except ValueError:
+            _LOGGER.debug(
+                "Ignoring unknown stored preferred_mode=%r for %s",
+                stored_mode,
+                address,
+            )
     try:
         await treadmill.async_ensure_connected()
     except TRANSIENT_ERRORS as err:

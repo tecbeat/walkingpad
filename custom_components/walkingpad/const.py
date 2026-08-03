@@ -33,3 +33,7 @@ POLL_INTERVAL_SEC = 1.0
 # (e.g. via the Start button). 1.5 km/h is slow enough to be safe but fast
 # enough that the belt visibly moves so the user sees the command worked.
 DEFAULT_START_SPEED_DECI_KMH = 15
+
+# Config-entry options key used to persist the user's preferred walking mode
+# (Mode.AUTOMAT or Mode.MANUAL, stored as int) across HA restarts.
+CONF_PREFERRED_MODE = "preferred_mode"

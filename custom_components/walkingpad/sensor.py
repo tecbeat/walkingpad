@@ -59,6 +59,9 @@ SENSORS: tuple[WalkingPadSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
         options=MODE_OPTIONS,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # Redundant with the Mode select entity; keep as diagnostic for
+        # debugging but hide by default.
+        entity_registry_enabled_default=False,
         value_fn=lambda data: MODE_STR.get(int(data.mode), "standby"),
     ),
     WalkingPadSensorEntityDescription(
@@ -122,7 +125,12 @@ class WalkingPadSensor(WalkingPadEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        if self.entity_description.key == "state":
+        # The State and Mode sensors are the whole point of the "pad is
+        # off but not broken" story — they must stay available whenever
+        # the coordinator has any data at all, even when the pad is in
+        # STANDBY or disconnected (in which case they render as
+        # "standby" / "disconnected" values, not "unavailable").
+        if self.entity_description.key in ("state", "mode"):
             return self.coordinator.last_update_success
         return super().available
 

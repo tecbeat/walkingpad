@@ -390,6 +390,120 @@ async def test_shutdown_stops_notifications_and_disconnects(treadmill, fake_pad)
 
 
 @pytest.mark.asyncio
+async def test_set_speed_in_manual_when_preferred_manual_skips_mode_switch(
+    treadmill, fake_pad
+):
+    """Steady-state: pad already in preferred mode, no mode-switch is sent."""
+    # Preferred defaults to MANUAL. Pad reports MANUAL. Only start + set_speed.
+    fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_set_speed(30)
+
+    assert len(fake_pad.writes) == 2  # start + set_speed
+    for pkt in fake_pad.writes:
+        assert pkt[2] != 0x02, "unexpected switch_mode when preferred == current"
+
+
+@pytest.mark.asyncio
+async def test_set_speed_respects_preferred_automat(treadmill, fake_pad):
+    """When preferred mode is AUTOMAT, set_speed must switch to AUTOMAT.
+
+    Regression: previously async_set_speed hard-coded switch_mode(MANUAL),
+    which was wrong for users who preferred AUTOMAT.
+    """
+    treadmill.set_preferred_mode(Mode.AUTOMAT)
+    # Pad currently in MANUAL — different from the preferred mode.
+    fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_set_speed(30)
+
+    assert len(fake_pad.writes) == 3
+    mode_switch, start, set_speed = fake_pad.writes
+    assert mode_switch[2] == 0x02
+    assert mode_switch[3] == int(Mode.AUTOMAT)
+    assert start[2] == 0x04
+    assert set_speed[2] == 0x01
+    assert set_speed[3] == 30
+
+
+@pytest.mark.asyncio
+async def test_wake_is_noop_when_already_awake(treadmill, fake_pad):
+    """async_wake must not beep if the pad is already out of STANDBY."""
+    fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_wake()
+
+    assert fake_pad.writes == []
+
+
+@pytest.mark.asyncio
+async def test_wake_from_standby_switches_to_preferred_mode(treadmill, fake_pad):
+    fake_pad.push_status(_make_status_frame(belt_state=5, mode=int(Mode.STANDBY)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_wake()
+
+    assert len(fake_pad.writes) == 1
+    packet = fake_pad.writes[0]
+    assert packet[2] == 0x02
+    assert packet[3] == int(Mode.MANUAL)  # default preferred
+
+
+@pytest.mark.asyncio
+async def test_wake_from_standby_uses_preferred_automat(treadmill, fake_pad):
+    treadmill.set_preferred_mode(Mode.AUTOMAT)
+    fake_pad.push_status(_make_status_frame(belt_state=5, mode=int(Mode.STANDBY)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_wake()
+
+    assert len(fake_pad.writes) == 1
+    packet = fake_pad.writes[0]
+    assert packet[2] == 0x02
+    assert packet[3] == int(Mode.AUTOMAT)
+
+
+@pytest.mark.asyncio
+async def test_sleep_is_noop_when_already_standby(treadmill, fake_pad):
+    fake_pad.push_status(_make_status_frame(belt_state=5, mode=int(Mode.STANDBY)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_sleep()
+
+    assert fake_pad.writes == []
+
+
+@pytest.mark.asyncio
+async def test_sleep_from_manual_switches_to_standby(treadmill, fake_pad):
+    fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
+    fake_pad.writes.clear()
+
+    await treadmill.async_sleep()
+
+    assert len(fake_pad.writes) == 1
+    packet = fake_pad.writes[0]
+    assert packet[2] == 0x02
+    assert packet[3] == int(Mode.STANDBY)
+
+
+@pytest.mark.asyncio
+async def test_switch_mode_updates_preferred_mode(treadmill, fake_pad):
+    """Explicit mode changes must also update the preferred mode."""
+    fake_pad.push_status(_make_status_frame(mode=int(Mode.MANUAL)))
+    fake_pad.writes.clear()
+    assert treadmill.preferred_mode is Mode.MANUAL
+
+    await treadmill.async_switch_mode(Mode.AUTOMAT)
+
+    assert treadmill.preferred_mode is Mode.AUTOMAT
+    assert len(fake_pad.writes) == 1
+    assert fake_pad.writes[0][3] == int(Mode.AUTOMAT)
+
+
+@pytest.mark.asyncio
 async def test_unexpected_disconnect_schedules_reconnect(monkeypatch, fake_pad):
     """After a lost BLE session the treadmill must reconnect on its own.
 

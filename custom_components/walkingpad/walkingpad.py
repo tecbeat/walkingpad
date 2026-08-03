@@ -80,6 +80,10 @@ class WalkingPadTreadmill:
         self._last_command_at: float = 0.0
         self._poll_task: asyncio.Task[None] | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
+        # Mode the pad should be in for walking commands (start, set_speed).
+        # Users can change this via the mode select entity; the integration
+        # will only send switch_mode when the pad's current mode differs.
+        self._preferred_mode: Mode = Mode.MANUAL
 
     @property
     def address(self) -> str:
@@ -100,6 +104,20 @@ class WalkingPadTreadmill:
             and self._client is not None
             and self._client.is_connected
         )
+
+    @property
+    def preferred_mode(self) -> Mode:
+        return self._preferred_mode
+
+    def set_preferred_mode(self, mode: Mode) -> None:
+        """Store the mode the pad should be in for walking commands.
+
+        This does NOT send anything to the pad — the mode select entity
+        sends switch_mode itself via async_switch_mode. It only records
+        the preference so subsequent start/set_speed calls know whether
+        a switch_mode is needed.
+        """
+        self._preferred_mode = mode
 
     def set_ble_device_and_advertisement_data(
         self, ble_device: BLEDevice, advertisement_data: AdvertisementData
@@ -273,28 +291,61 @@ class WalkingPadTreadmill:
         )
 
     async def async_switch_mode(self, mode: Mode) -> None:
-        """Switch operating mode (STANDBY / MANUAL / AUTOMAT)."""
+        """Switch operating mode (STANDBY / MANUAL / AUTOMAT).
+
+        Also updates the preferred mode so subsequent walking commands
+        don't switch it back.
+        """
+        self._preferred_mode = mode
         await self._async_send(switch_mode_command(mode))
+
+    async def async_wake(self) -> None:
+        """Wake the pad from standby into the preferred walking mode.
+
+        A no-op if the pad is already awake. This is what the Power switch
+        turns on. One command, one beep.
+        """
+        if self._data.mode is Mode.STANDBY:
+            await self._async_send(switch_mode_command(self._preferred_mode))
+
+    async def async_sleep(self) -> None:
+        """Put the pad into standby.
+
+        A no-op if the pad is already in standby. One command, one beep.
+        """
+        if self._data.mode is not Mode.STANDBY:
+            await self._async_send(switch_mode_command(Mode.STANDBY))
 
     async def async_start(self) -> None:
         """Start the belt at DEFAULT_START_SPEED_DECI_KMH.
 
-        The A1 requires start_belt AND a non-zero set_speed to actually move.
-        A bare start_belt only puts the pad into 'ready' (belt_state=9). We
-        therefore always follow up with set_speed so pressing Start visibly
-        does something.
+        Delegates to async_set_speed, which already handles the arm-
+        before-set_speed dance conditionally. Pressing Start on an awake
+        pad in MANUAL mode results in a single beep.
         """
         await self.async_set_speed(DEFAULT_START_SPEED_DECI_KMH)
 
     async def async_set_speed(self, speed_deci_kmh: int) -> None:
         """Set target belt speed in tenths of km/h (0..60).
 
-        If the belt is not already running, sends switch_mode(MANUAL) and
-        start_belt first. On the A1, set_speed alone is ignored unless the
-        belt has been armed via start_belt in the same 'session'.
+        Only sends what is necessary for the current pad state:
+
+        - If the pad is in STANDBY, wake it into the preferred walking mode
+          first (this is the "auto-wake" fallback so setting a speed on a
+          sleeping pad still works — the intended flow is that the user
+          hits the Power switch first).
+        - If the pad's current mode differs from the preferred walking
+          mode, switch it. In steady state (pad already awake in the right
+          mode) no switch_mode is sent, so no extra beep.
+        - If the belt has not been armed yet (status not RUNNING/STARTING),
+          send start_belt. The A1 ignores set_speed until it has been
+          armed once per session.
+        - Then send the set_speed itself.
         """
-        if self._data.mode is not Mode.MANUAL:
-            await self._async_send(switch_mode_command(Mode.MANUAL))
+        if self._data.mode is Mode.STANDBY:
+            await self._async_send(switch_mode_command(self._preferred_mode))
+        elif self._data.mode is not self._preferred_mode:
+            await self._async_send(switch_mode_command(self._preferred_mode))
         if self._data.status not in (Status.RUNNING, Status.STARTING):
             await self._async_send(start_command())
         await self._async_send(set_speed_command_deci(speed_deci_kmh))

@@ -1,4 +1,9 @@
-"""Button platform (start/stop/mode) for the WalkingPad treadmill."""
+"""Button platform (start/stop) for the WalkingPad treadmill.
+
+Only Start and Stop live here. Wake/Sleep are exposed via the Power
+switch, mode selection via the Mode select. Each button press results in
+a single command to the pad — no chained beeps.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import WalkingPadConfigEntry
 from .entity import WalkingPadEntity
-from .protocol import Mode, Status
+from .protocol import Status
 from .walkingpad import WalkingPadTreadmill
 
 
@@ -20,16 +25,6 @@ class WalkingPadButtonEntityDescription(ButtonEntityDescription):
     """Describes a WalkingPad button."""
 
     press_fn: Callable[[WalkingPadTreadmill, Status], Awaitable[None]]
-
-
-async def _async_toggle_start_stop(
-    treadmill: WalkingPadTreadmill, status: Status
-) -> None:
-    """Stop when running/starting, otherwise start."""
-    if status in (Status.RUNNING, Status.STARTING):
-        await treadmill.async_stop()
-    else:
-        await treadmill.async_start()
 
 
 BUTTONS: tuple[WalkingPadButtonEntityDescription, ...] = (
@@ -44,25 +39,6 @@ BUTTONS: tuple[WalkingPadButtonEntityDescription, ...] = (
         translation_key="stop",
         icon="mdi:stop",
         press_fn=lambda treadmill, _status: treadmill.async_stop(),
-    ),
-    WalkingPadButtonEntityDescription(
-        key="toggle",
-        translation_key="toggle",
-        icon="mdi:play-pause",
-        press_fn=_async_toggle_start_stop,
-    ),
-    WalkingPadButtonEntityDescription(
-        key="wake",
-        translation_key="wake",
-        icon="mdi:sleep-off",
-        press_fn=lambda treadmill, _status: treadmill.async_switch_mode(Mode.MANUAL),
-    ),
-    WalkingPadButtonEntityDescription(
-        key="sleep",
-        translation_key="sleep",
-        icon="mdi:sleep",
-        entity_registry_enabled_default=False,
-        press_fn=lambda treadmill, _status: treadmill.async_switch_mode(Mode.STANDBY),
     ),
 )
 

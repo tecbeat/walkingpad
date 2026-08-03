@@ -37,5 +37,10 @@ dev/esphome/.device-builder*
 # Playwright MCP snapshots (from browser-driven manual tests)
 .playwright-mcp/
 
+# CI ephemeral artifacts (produced by templater / version_bumper and
+# consumed by the updater job — never committed to the repo).
+updater.yml
+
 .env
 test-secrets.env
+.tmp/

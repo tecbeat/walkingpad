@@ -3,3 +3,53 @@ include:
   - project: 'maintenance/teccave_pipeline'
     ref: main
     file: '/.pipeline_defs/.default_pipeline.yml'
+
+# Sync the semantic version calculated by `versioner` into the two
+# version-carrying files in this repo (`.version` and
+# `custom_components/walkingpad/manifest.json`) and append a commit
+# action to `updater.yml` so the `updater` job commits them back to
+# main. Runs only on the default branch — feature branches get a
+# development-only VERSION and must not touch the persistent files.
+version_bumper:
+  stage: prepare
+  image: hub.teccave.de/images/core:v1.4.27@sha256:f729fa48163d225a24f8ec1aa1cf24c188ccb7d7e8f593412e74d042ab20cb88
+  needs:
+    - job: versioner
+      artifacts: true
+    - job: templater
+      artifacts: true
+      optional: true
+  rules:
+    - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
+      when: on_success
+    - when: never
+  script:
+    - python3 scripts/bump_version.py
+  artifacts:
+    paths:
+      - .version
+      - custom_components/walkingpad/manifest.json
+      - updater.yml
+    expire_in: 1 day
+    when: always
+  tags:
+    - teccave
+
+# The default `.updater` template needs versioner + templater +
+# changelogger + releaser. It also has to see our version_bumper's
+# updater.yml so the version-bump commit actually lands on main;
+# without adding the dependency, the pipeline could otherwise run
+# `updater` before `version_bumper` finishes and miss the bump.
+updater:
+  needs:
+    - job: versioner
+      artifacts: false
+    - job: templater
+      artifacts: true
+      optional: true
+    - job: changelogger
+      artifacts: true
+    - job: releaser
+      artifacts: false
+    - job: version_bumper
+      artifacts: true

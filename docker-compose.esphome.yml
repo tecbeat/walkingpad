@@ -1,0 +1,36 @@
+---
+# Local ESPHome dashboard for building Bluetooth Proxy firmware.
+#
+# NOT a production deployment. The ESPHome dashboard is used only to author
+# YAML configs, compile firmware, and (optionally) push OTA updates once a
+# proxy is on Wi-Fi.
+#
+# First-flash of a fresh ESP32 happens through the browser via WebSerial at
+# https://web.esphome.io/ -- no USB passthrough into this container is needed.
+#
+# Usage:
+#   docker compose -f docker-compose.esphome.yml up -d
+#   open http://127.0.0.1:6052
+#   docker compose -f docker-compose.esphome.yml down
+#
+# Config files live in dev/esphome/. The build cache (.esphome/) and any
+# secrets.yaml the dashboard writes are gitignored.
+services:
+  esphome:
+    image: ghcr.io/esphome/esphome:2026.7.3@sha256:de90d689b89e20f171b0fbdd0dfea31b21ef647aa7e83d6efd2916ca6e7a30d2
+    container_name: esphome
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Berlin
+      USERNAME: admin
+      PASSWORD: ${ESPHOME_DASHBOARD_PASSWORD}
+    volumes:
+      - ./dev/esphome:/config
+    ports:
+      - "127.0.0.1:6052:6052"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:6052/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

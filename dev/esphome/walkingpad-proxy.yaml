@@ -1,0 +1,49 @@
+# ESPHome Bluetooth Proxy config tuned for a plain ESP32-WROOM-32 devboard.
+#
+# Author this in the local ESPHome dashboard at http://127.0.0.1:6052.
+# First-flash: build here, then flash the resulting .factory.bin via
+# https://web.esphome.io/ in Chrome/Edge over WebSerial. After the ESP is on
+# Wi-Fi, use the dashboard's "Update" button for OTA.
+#
+# The pad is discovered by the walkingpad integration through this proxy as
+# long as `bluetooth_proxy.active: true` is set (passive scanning is not
+# enough to establish a GATT connection).
+
+substitutions:
+  device_name: walkingpad-proxy
+  friendly_name: WalkingPad Bluetooth Proxy
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+# Plain ESP32-WROOM-32 devboard.
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: WalkingPad Proxy AP
+
+captive_portal:
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+bluetooth_proxy:
+  active: true

@@ -1,7 +1,16 @@
 ---
 repo:
-  description: The repository description goes here!
-  command: "docker compose up -d"
+  description: >-
+    Home Assistant custom integration for the KingSmith WalkingPad A1 treadmill.
+    Talks to the pad over Bluetooth Low Energy through Home Assistant's own
+    Bluetooth stack, so any HA-supported adapter can drive it -- including an
+    ESP32 Bluetooth proxy running ESPHome in active mode.
+  command: "See docs/setup.md for HACS installation."
   feature:
-    Please fill in: 'Describe the features of the service'
-
+    Remote-mirrored controls: "Speed slider (0.5..6.0 km/h), Mode select (manual / automat), and a single Start/Stop toggle button -- exactly what the physical remote offers, nothing more."
+    Never-fails UI: "Sensors keep their last-known values when the pad is off, in standby, or out of range. The setpoints stay editable. No red error states for a normal power-off appliance."
+    Single-beep control flow: "Every user action produces the minimum number of BLE commands the pad accepts -- one beep per intent, three beeps at most for a full wake+arm+set_speed sequence from cold standby."
+    Auto-wake on start: "Pressing Start/Stop on a sleeping pad transparently wakes it into the preferred mode, waits for the belt controller to settle, then starts the belt at the slider speed."
+    ESP32 Bluetooth proxy support: "Works transparently with an ESPHome Bluetooth Proxy in active mode -- ideal when the HA host itself is out of BLE range."
+    Config Flow with auto-discovery: "The pad appears automatically in Settings > Devices & Services once it is powered on and in range of the proxy or a local BT adapter."
+    Reverse-engineered A1 protocol: "Based on the ph4-walkingpad protocol (0xf7/0xa2 command framing, 0xf8/0xa2 status stream), verified against a real 2026 A1 unit."

@@ -1,0 +1,8 @@
+# Minimal HA config for local integration-load verification.
+default_config:
+
+logger:
+  default: warning
+  logs:
+    custom_components.walkingpad: debug
+    homeassistant.components.bluetooth: info

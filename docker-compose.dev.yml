@@ -1,0 +1,27 @@
+---
+# Local development stack. NOT a production deployment.
+#
+# The `walkingpad` integration itself is a HACS custom component that lives in
+# `custom_components/walkingpad/` and is installed into a real Home Assistant
+# instance via HACS -- there is no server-side service to run.
+#
+# This compose file starts a disposable HA container with the component mounted
+# in read-only mode so the integration's load path, imports, and Bluetooth
+# discovery manifest can be verified without touching production HA.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f homeassistant
+#   docker compose down -v   # discards the dev config volume
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.7.4
+    container_name: walkingpad-ha-dev
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Berlin
+    volumes:
+      - ./dev/homeassistant:/config
+      - ./custom_components/walkingpad:/config/custom_components/walkingpad:ro
+    ports:
+      - "8123:8123"

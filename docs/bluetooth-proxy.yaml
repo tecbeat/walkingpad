@@ -1,0 +1,58 @@
+# ESPHome Bluetooth Proxy configuration for the WalkingPad integration.
+#
+# Flash this onto an ESP32 that is placed within Bluetooth range of the pad
+# (typically same room, line of sight). The proxy relays BLE connections from
+# the pad back to Home Assistant over Wi-Fi, so the HA host itself does not
+# need Bluetooth hardware or line-of-sight to the pad.
+#
+# The critical bit is `bluetooth_proxy.active: true` -- passive/scanner-only
+# proxies can see advertisements but not establish connections, so the config
+# flow would list the pad and then be unable to talk to it.
+#
+# Alternatively, use the ready-made "Bluetooth Proxy" build at
+# https://esphome.io/projects/?type=bluetooth (web-flash, no YAML editing).
+
+substitutions:
+  device_name: walkingpad-proxy
+  friendly_name: WalkingPad Bluetooth Proxy
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  # Match this to your board. Any ESP32 with Wi-Fi works; ESP32-S3 is the
+  # currently recommended chip. For ethernet-connected variants (e.g. Olimex
+  # ESP32-POE-ISO-EA), replace the `wifi:` block with `ethernet:`.
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+api:
+  encryption:
+    # Replace with your own generated key: `esphome secrets generate ...`
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Falls back to a captive portal if Wi-Fi is unreachable.
+  ap:
+    ssid: ${friendly_name} Fallback
+
+captive_portal:
+
+esp32_ble_tracker:
+  scan_parameters:
+    # Active scanning yields richer advertisements and helps HA see the pad.
+    active: true
+
+bluetooth_proxy:
+  # Active connections -- REQUIRED for the WalkingPad integration to actually
+  # talk to the pad. Passive proxies can discover it but not control it.
+  active: true

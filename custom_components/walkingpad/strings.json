@@ -1,0 +1,76 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "KingSmith WalkingPad",
+        "description": "Select the WalkingPad to add. It must be powered on and in range of Home Assistant or an active Bluetooth proxy.",
+        "data": {
+          "address": "Bluetooth device"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "KingSmith WalkingPad",
+        "description": "Do you want to set up {name}?"
+      }
+    },
+    "abort": {
+      "no_devices_found": "No WalkingPad devices found. Make sure the pad is powered on and in range of Home Assistant or an active Bluetooth proxy.",
+      "already_configured": "This WalkingPad is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "state": {
+        "name": "State",
+        "state": {
+          "stopped": "Stopped",
+          "running": "Running",
+          "starting": "Starting",
+          "stopping": "Stopping",
+          "standby": "Standby",
+          "disconnected": "Disconnected"
+        }
+      },
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "automat": "Automatic",
+          "manual": "Manual",
+          "standby": "Standby"
+        }
+      },
+      "speed_feedback": {
+        "name": "Speed"
+      },
+      "distance": {
+        "name": "Distance"
+      },
+      "duration": {
+        "name": "Duration"
+      },
+      "steps": {
+        "name": "Steps"
+      }
+    },
+    "number": {
+      "speed": {
+        "name": "Speed"
+      }
+    },
+    "button": {
+      "toggle": {
+        "name": "Start/Stop"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "manual": "Manual",
+          "automat": "Automatic"
+        }
+      }
+    }
+  }
+}

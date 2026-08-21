@@ -12,7 +12,7 @@ include:
 # development-only VERSION and must not touch the persistent files.
 version_bumper:
   stage: prepare
-  image: hub.teccave.de/images/core:v1.4.33@sha256:296b577ab312a5e5f5408f9e5c32470c5e20ebd7209cdd5e49e3ae3d533f6114
+  image: hub.teccave.de/images/core:v1.4.34@sha256:6c1dddc995e7e06284c61a9bc8a5ac83317cb67a65bc83f4073e0c32656b5d42
   needs:
     - job: versioner
       artifacts: true
